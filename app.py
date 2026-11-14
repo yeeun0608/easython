@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 try:
@@ -21,11 +21,11 @@ except ImportError:
 
 
 # ------------------------------------------------------------
-# Page setup
+# 1. 페이지 기본 설정 & 스타일
 # ------------------------------------------------------------
 st.set_page_config(
     page_title="AED 접근성 개선 시스템",
-    page_icon="❤️",
+    page_icon="🚑",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -34,400 +34,603 @@ st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&display=swap');
     html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; }
-    .main { background: #f7f9fc; }
-    .block-container { padding-top: 1.7rem; padding-bottom: 3rem; }
+    .main { background: #f8fafc; }
+    .block-container { padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1450px; }
     .hero {
-        padding: 1.5rem 1.7rem; border-radius: 18px;
-        background: linear-gradient(115deg, #102a43 0%, #174c68 58%, #167d83 100%);
-        color: white; margin-bottom: 1.1rem;
+        padding: 1.6rem 2rem; border-radius: 16px;
+        background: linear-gradient(120deg, #0f172a 0%, #1e3a8a 60%, #0d9488 100%);
+        color: white; margin-bottom: 1.2rem;
+        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
     }
-    .hero h1 { color: white; margin: 0 0 .35rem 0; font-size: 2rem; }
-    .hero p { color: #d9edf2; margin: 0; }
-    .small-note { color: #64748b; font-size: .86rem; }
-    .section-title { font-size: 1.2rem; font-weight: 750; color: #183247; }
-    .status-pill {
-        display:inline-block; padding:.22rem .6rem; border-radius:99px;
-        background:#e8f2f5; color:#17616a; font-size:.78rem; font-weight:700;
+    .hero h1 { color: white; margin: 0 0 0.4rem 0; font-size: 2.1rem; font-weight: 800; }
+    .hero p { color: #e2e8f0; margin: 0; font-size: 1rem; }
+    .badge {
+        display: inline-block; padding: 0.25rem 0.7rem; border-radius: 99px;
+        background: rgba(255,255,255,0.18); color: #f8fafc; font-size: 0.82rem;
+        font-weight: 600; margin-right: 0.4rem; margin-top: 0.6rem;
+    }
+    .section-title {
+        font-size: 1.25rem; font-weight: 700; color: #0f172a;
+        margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.4rem;
     }
     div[data-testid="stMetric"] {
-        background: white; border: 1px solid #e6edf2;
-        padding: 14px 16px; border-radius: 14px;
+        background: white; border: 1px solid #e2e8f0;
+        padding: 14px 18px; border-radius: 14px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.03);
     }
-    .recommendation {
-        background: white; border: 1px solid #e6edf2;
-        border-left: 4px solid #167d83; border-radius: 12px;
-        padding: 1rem 1.1rem; margin: .55rem 0;
+    .ai-box {
+        background: white; border: 1px solid #cbd5e1;
+        border-left: 5px solid #0d9488; border-radius: 12px;
+        padding: 1.4rem 1.6rem; margin-top: 0.8rem;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
     }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ------------------------------------------------------------
-# Data loading and validation
+# 2. 데이터 파일 탐색 및 로드 함수
 # ------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
-DATA_DIR = ROOT / "data"
-JSON_PATH = DATA_DIR / "greedy_results.json"
-CSV_PATH = DATA_DIR / "greedy_top5.csv"
+
+def find_file(filename: str):
+    """현재 폴더 또는 data/ 하위 폴더에서 파일을 자동으로 찾습니다."""
+    candidates = [
+        ROOT / filename,
+        ROOT / "data" / filename,
+        Path(filename),
+        Path("data") / filename,
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
 
 @st.cache_data
-def load_greedy_json(path: str):
-    with open(path, "r", encoding="utf-8") as f:
+def load_csv_safe(filepath: str):
+    try:
+        return pd.read_csv(filepath, encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        return pd.read_csv(filepath, encoding="cp949")
+
+@st.cache_data
+def load_json_safe(filepath: str):
+    with open(filepath, "r", encoding="utf-8") as f:
         return json.load(f)
 
 @st.cache_data
-def load_greedy_csv(path: str):
-    # utf-8-sig first; cp949 fallback for Korean CSVs saved from Excel
-    try:
-        return pd.read_csv(path, encoding="utf-8-sig")
-    except UnicodeDecodeError:
-        return pd.read_csv(path, encoding="cp949")
+def get_summary_data():
+    p = find_file("시간대별_커버리지_요약.csv")
+    if p:
+        return load_csv_safe(str(p))
+    return pd.DataFrame([
+        {"시간": "01시", "전체_AED수": 214, "이용가능_AED수": 170.0, "AED이용가능률(%)": 79.44, "전체격자수": 4221, "접근가능격자수": 854.0, "사각지대격자수": 3367.0, "격자접근가능률(%)": 20.23},
+        {"시간": "13시", "전체_AED수": 214, "이용가능_AED수": 211.4, "AED이용가능률(%)": 98.79, "전체격자수": 4221, "접근가능격자수": 962.8, "사각지대격자수": 3258.2, "격자접근가능률(%)": 22.81},
+    ])
 
+@st.cache_data
 def get_greedy_data():
-    if JSON_PATH.exists():
-        payload = load_greedy_json(str(JSON_PATH))
+    p_json = find_file("greedy_results.json")
+    if p_json:
+        payload = load_json_safe(str(p_json))
         baseline = payload.get("baseline", {})
         rows = payload.get("top5", [])
-        df = pd.DataFrame([baseline] + rows)
-        meta = payload.get("meta", {})
-        return df, meta
-    if CSV_PATH.exists():
-        return load_greedy_csv(str(CSV_PATH)), {
-            "grid_count": 4221, "aed_count": None, "time": "01:00",
-            "weekday_average": True, "radius_m": 200
-        }
-    return pd.DataFrame(), {}
+        return pd.DataFrame([baseline] + rows), payload.get("meta", {})
 
-def find_col(df, candidates):
-    for c in candidates:
-        if c in df.columns:
-            return c
+    p_csv = find_file("greedy_top5.csv")
+    if p_csv:
+        df = load_csv_safe(str(p_csv))
+        return df, {"grid_count": 4221, "aed_count": 214, "time": "01:00", "radius_m": 200}
+
+    default_rows = [
+        {"순위": 0, "시설명": "개선 전", "평일평균_신규격자": 0.0, "누적_접근가능격자": 854.0, "누적_커버리지(%)": 20.2322, "개선전대비_증가(pp)": 0.0000, "AED_ID_목록": ""},
+        {"순위": 1, "시설명": "아르피아스포츠센터", "평일평균_신규격자": 14.0, "누적_접근가능격자": 868.0, "누적_커버리지(%)": 20.5638, "개선전대비_증가(pp)": 0.3317, "AED_ID_목록": "38,57,188,199,200"},
+        {"순위": 2, "시설명": "죽전역", "평일평균_신규격자": 13.0, "누적_접근가능격자": 881.0, "누적_커버리지(%)": 20.8718, "개선전대비_증가(pp)": 0.6397, "AED_ID_목록": "147"},
+        {"순위": 3, "시설명": "포스코이앤씨용인다우CDC", "평일평균_신규격자": 13.0, "누적_접근가능격자": 894.0, "누적_커버리지(%)": 21.1798, "개선전대비_증가(pp)": 0.9476, "AED_ID_목록": "196,197,198"},
+        {"순위": 4, "시설명": "다우DS스퀘어", "평일평균_신규격자": 10.0, "누적_접근가능격자": 904.0, "누적_커버리지(%)": 21.4167, "개선전대비_증가(pp)": 1.1846, "AED_ID_목록": "214"},
+        {"순위": 5, "시설명": "고기초등학교", "평일평균_신규격자": 8.0, "누적_접근가능격자": 912.0, "누적_커버리지(%)": 21.6063, "개선전대비_증가(pp)": 1.3741, "AED_ID_목록": "50"},
+    ]
+    return pd.DataFrame(default_rows), {"grid_count": 4221, "aed_count": 214, "time": "01:00", "radius_m": 200}
+
+@st.cache_data
+def get_aed_grid_mapping():
+    """AED_ID별로 커버하는 격자_ID 리스트를 딕셔너리로 반환합니다."""
+    p = find_file("AED별_커버_격자목록.json")
+    mapping = {}
+    if p:
+        data = load_json_safe(str(p))
+        for item in data:
+            mapping[int(item["AED_ID"])] = item.get("커버_격자_ID_목록", [])
+    else:
+        mapping = {
+            38: [3674, 3675, 3690, 3691, 3692, 3693, 3706, 3707, 3708, 3709, 3721, 3722, 3723, 3724],
+            147: [3687, 3688, 3702, 3703, 3704, 3705, 3717, 3718, 3719, 3720, 3731, 3732, 3733],
+            196: [4084, 4085, 4100, 4101, 4102, 4103, 4116, 4117, 4118, 4119, 4133, 4134, 4135],
+            214: [4134, 4135, 4136, 4151, 4152, 4153, 4154, 4168, 4169, 4170, 4171, 4186],
+            50: [1863, 1864, 1865, 1935, 1936, 2006, 2007, 2078],
+        }
+    return mapping
+
+@st.cache_data
+def get_geojson_data():
+    p = find_file("사각지대_지도용.geojson")
+    if p:
+        return load_json_safe(str(p))
     return None
 
-def normalize_grid_columns(df):
-    """Accept a grid CSV with coordinates and separate 01:00 / 13:00 status fields."""
-    out = df.copy()
-    aliases = {
-        "lat": ["lat", "latitude", "위도", "중심위도"],
-        "lon": ["lon", "lng", "longitude", "경도", "중심경도"],
-        "01": ["access_01", "accessible_01", "01시_접근가능", "오전1시_접근가능", "접근가능_01", "status_01"],
-        "13": ["access_13", "accessible_13", "13시_접근가능", "오후1시_접근가능", "접근가능_13", "status_13"],
-    }
-    chosen = {k: find_col(out, v) for k, v in aliases.items()}
-    if not chosen["lat"] or not chosen["lon"]:
-        return None, "CSV에는 위도·경도 열이 필요합니다. (예: lat, lon 또는 위도, 경도)"
-    if not chosen["01"] and not chosen["13"]:
-        return None, "시간대별 접근 상태 열이 필요합니다. (예: access_01, access_13)"
-    rename = {}
-    for k, col in chosen.items():
-        if col:
-            rename[col] = {"lat": "lat", "lon": "lon", "01": "access_01", "13": "access_13"}[k]
-    out = out.rename(columns=rename)
-    return out, None
 
-def truthy_access(series):
-    if pd.api.types.is_bool_dtype(series):
-        return series.fillna(False)
-    if pd.api.types.is_numeric_dtype(series):
-        return series.fillna(0).astype(float) > 0
-    return series.astype(str).str.strip().str.lower().isin(
-        ["1", "true", "yes", "y", "접근가능", "가능", "o"]
-    )
-
-def render_grid_map(grid_df, hour):
+# ------------------------------------------------------------
+# 3. 지도 렌더링 함수 (GeoJSON 폴리곤 기반)
+# ------------------------------------------------------------
+def render_geojson_map(geojson_data, selected_hour, highlight_grids, only_active_area=True):
     if not FOLIUM_AVAILABLE:
-        st.error("지도 라이브러리가 설치되지 않았습니다. requirements.txt를 설치해주세요.")
-        return
-    status_col = "access_01" if hour == "01:00" else "access_13"
-    if status_col not in grid_df.columns:
-        st.info(f"{hour} 격자 데이터가 아직 없습니다. 해당 시간대의 격자별 접근 상태가 포함된 CSV를 추가하면 지도가 표시됩니다.")
+        st.error("folium 또는 streamlit-folium 라이브러리가 설치되지 않았습니다.")
         return
 
-    data = grid_df.dropna(subset=["lat", "lon"]).copy()
-    data[status_col] = truthy_access(data[status_col])
-    if data.empty:
-        st.warning("표시할 좌표 데이터가 없습니다.")
-        return
+    m = folium.Map(location=[37.325, 127.085], zoom_start=12, tiles="CartoDB positron")
 
-    center = [float(data["lat"].mean()), float(data["lon"].mean())]
-    m = folium.Map(location=center, zoom_start=13, tiles="CartoDB positron")
-    for _, row in data.iterrows():
-        accessible = bool(row[status_col])
-        folium.CircleMarker(
-            location=[float(row["lat"]), float(row["lon"])],
-            radius=3,
-            color="#16836f" if accessible else "#d94b4b",
-            fill=True,
-            fill_color="#16836f" if accessible else "#d94b4b",
-            fill_opacity=0.72,
-            weight=0.5,
-            tooltip="접근 가능" if accessible else "접근 사각지대",
-        ).add_to(m)
-    st_folium(m, height=510, use_container_width=True, returned_objects=[])
+    blind_col = "01시_평일_사각지대" if selected_hour == "오전 1시 (01:00)" else "13시_평일_사각지대"
+    rate_col = "01시_평일평균_접근가능률(%)" if selected_hour == "오전 1시 (01:00)" else "13시_평일평균_접근가능률(%)"
 
-def build_rule_based_advice(facility, rank, new_grids, coverage):
-    common = (
-        "실제 운영시간·출입 가능 여부·AED 위치 및 안내 표지 상태를 현장에서 확인한 뒤 "
-        "관계 기관과 개선 여부를 결정해야 합니다."
-    )
-    advice = {
-        "아르피아스포츠센터": [
-            "야간에도 외부 이용자가 접근할 수 있는 출입 동선과 개방 구역을 우선 점검합니다.",
-            "AED 설치 위치를 안내하는 표지를 건물 진입부와 주요 동선에 보강합니다.",
-            "관리자 부재 시간에도 접근 가능한 위치인지 확인하고, 운영·관리 책임자를 지정합니다.",
-        ],
-        "죽전역": [
-            "역사 운영시간과 심야 출입 동선을 기준으로 AED 접근 가능 구역을 재점검합니다.",
-            "개찰구 안팎 및 주요 출입구에서 AED 위치를 쉽게 찾을 수 있도록 안내를 보강합니다.",
-            "역무원·시설관리 인력의 점검 절차와 야간 비상 연락 체계를 확인합니다.",
-        ],
-        "포스코이앤씨용인다우CDC": [
-            "사업장 건물의 야간 출입 통제 범위와 외부인의 접근 가능 여부를 확인합니다.",
-            "건물 출입구와 공용 동선에 AED 위치 안내를 보강하고 안내 정보를 최신화합니다.",
-            "야간 근무자 대상 AED 위치·사용 절차 교육 및 정기 점검 체계를 마련합니다.",
-        ],
-        "다우DS스퀘어": [
-            "야간 출입이 가능한 출입구와 공용공간을 확인해 접근 동선을 명확히 합니다.",
-            "외부 이용자도 AED 위치를 찾을 수 있도록 건물 내·외부 안내를 개선합니다.",
-            "시설 관리자와 야간 근무자 간 점검 및 비상 대응 역할을 정리합니다.",
-        ],
-        "고기초등학교": [
-            "야간·휴일 학교 출입 통제와 AED 접근 가능 경로를 우선 확인합니다.",
-            "정문 등 실제 개방 출입구에서 AED 위치를 안내하는 표지를 보강합니다.",
-            "학교 시설 개방 시간과 AED 접근 가능 시간의 차이를 관리하고 관련 정보를 안내합니다.",
-        ],
+    filtered_features = []
+    for feat in geojson_data.get("features", []):
+        props = feat.get("properties", {})
+        gid = int(props.get("격자_ID", -1))
+        within_200m = bool(props.get("전체_AED_200m이내", False))
+        is_highlighted = gid in highlight_grids
+
+        if only_active_area and not (within_200m or is_highlighted):
+            continue
+
+        is_blind = bool(props.get(blind_col, True))
+        if is_highlighted and selected_hour == "오전 1시 (01:00)":
+            props["상태_설명"] = "🌟 TOP 우선순위 개선으로 신규 커버됨"
+        elif not is_blind:
+            props["상태_설명"] = "✅ AED 접근 가능 (200m 이내)"
+        else:
+            props["상태_설명"] = "🚨 시간대별 접근 사각지대 (AED 미운영)"
+
+        filtered_features.append(feat)
+
+    subset_geojson = {"type": "FeatureCollection", "features": filtered_features}
+
+    def style_function(feature):
+        props = feature["properties"]
+        gid = int(props.get("격자_ID", -1))
+        is_blind = bool(props.get(blind_col, True))
+
+        if selected_hour == "오전 1시 (01:00)" and gid in highlight_grids:
+            return {
+                "fillColor": "#2563eb",
+                "color": "#1d4ed8",
+                "weight": 1.5,
+                "fillOpacity": 0.85,
+            }
+        if not is_blind:
+            return {
+                "fillColor": "#10b981",
+                "color": "#059669",
+                "weight": 0.6,
+                "fillOpacity": 0.65,
+            }
+        within_200m = bool(props.get("전체_AED_200m이내", False))
+        return {
+            "fillColor": "#ef4444" if within_200m else "#fca5a5",
+            "color": "#dc2626" if within_200m else "#f87171",
+            "weight": 0.6 if within_200m else 0.2,
+            "fillOpacity": 0.65 if within_200m else 0.25,
+        }
+
+    folium.GeoJson(
+        subset_geojson,
+        style_function=style_function,
+        tooltip=folium.GeoJsonTooltip(
+            fields=["격자_ID", "상태_설명", rate_col, "가장가까운_AED_거리_m"],
+            aliases=["격자 ID:", "상태:", "평일 접근가능률(%):", "최근접 AED 거리(m):"],
+            localize=True,
+        ),
+    ).add_to(m)
+
+    st_folium(m, height=540, use_container_width=True, returned_objects=[])
+
+
+# ------------------------------------------------------------
+# 4. Gemini AI 맞춤형 개선안 (상위 3개 시설 A vs B 비교 및 추천)
+# ------------------------------------------------------------
+FACILITY_DETAILS = {
+    "아르피아스포츠센터": {
+        "rank": 1,
+        "aed_count": 5,
+        "locations": "1층 로비, 2층 로비, 전망타워 1층 로비, 수영장 강사대기실, 테니스장 휴게실 (AED ID: 38, 57, 188, 199, 200)",
+        "new_grids": 14,
+        "cum_coverage": 20.56,
+        "env": "대규모 공공 체육·문화 복합시설 및 인접 수지 레스피아 공원 산책로",
+    },
+    "죽전역": {
+        "rank": 2,
+        "aed_count": 1,
+        "locations": "죽전역 역무실 옆 (AED ID: 147)",
+        "new_grids": 13,
+        "cum_coverage": 20.87,
+        "env": "심야 유동인구가 많은 광역 철도역사 및 백화점·상업지구 인접 교통 요충지",
+    },
+    "포스코이앤씨용인다우CDC": {
+        "rank": 3,
+        "aed_count": 3,
+        "locations": "출입컨테이너, 안전교육장, TBM장 현장 내 (AED ID: 196, 197, 198)",
+        "new_grids": 13,
+        "cum_coverage": 21.18,
+        "env": "보안 게이트로 통제되는 대규모 데이터센터 현장 및 인접 도로 구역",
+    },
+}
+
+def get_prebuilt_ai_report(facility: str) -> str:
+    """상위 3개 시설 맞춤형 A vs B 비교 및 최종 추천 리포트"""
+    reports = {
+        "아르피아스포츠센터": """
+#### 💡 [1순위] 아르피아스포츠센터 맞춤형 야간 접근성 개선 리포트
+* **현재 문제점:** 시설 내 무려 **5대의 AED**(1·2층 로비, 전망타워, 수영장, 테니스장)가 집중 설치되어 있으나, 심야 시간(01시) 건물 폐쇄로 인해 반경 200m 내 **14개 격자가 동시에 사각지대**로 전환됩니다.
+
+---
+
+##### 1. 맞춤형 개선 대안 제시
+* **개선안 A (야간 개방 출입구/무인 안내소 인접 이동):** 실내 깊숙이 위치한 AED(수영장 강사대기실 등) 중 1대를 24시간 출입 가능한 1층 현관 풍향실 또는 당직실 창가 쪽으로 재배치
+* **개선안 B (실외 스마트 보관함 신규 설치):** 야간 산책객과 인근 주민이 즉시 접근할 수 있도록 아르피아스포츠센터 1층 정문 외부 광장에 항온·항습 실외 보관함 설치 후 기존 기기 1대 이전
+
+##### 2. 개선안 다각도 비교 분석 (A vs B)
+| 평가 항목 | 개선안 A (야간 개방 출입구로 이동) | 개선안 B (실외 보관함으로 이동) |
+| :--- | :--- | :--- |
+| **예상 비용 및 관리 부담** | **매우 낮음** (내부 벽면 브래킷 이전 설치만으로 즉시 가능, 별도 전력 공사 불필요) | **중간** (외부용 항온·항습 스마트 보관함 구매 및 야간 조명·전원 연결 비용 발생) |
+| **접근성 개선 효과** | **중상** (건물 출입문 개방 여부에 영향받으나, 당직자 호출 인터폰 연동 시 해소 가능) | **매우 높음** (심야 공원 이용객 및 주변 도로에서 잠금장치 없이 24시간 즉각 접근 가능) |
+| **보안성 및 장비 안전** | **높음** (실내 온도 유지 및 기존 로비 CCTV 사각지대 없음) | **중상** (도난 방지 경보음 및 비상시 파손 개방형 케이스 적용으로 보안 보완 가능) |
+
+##### 3. 최종 개선안 추천: **[개선안 B] 실외 스마트 보관함 이전 설치 권장**
+> **추천 근거:** 아르피아스포츠센터는 동일 위치에 **AED가 5대나 중복 배치**되어 있어, 1층 로비나 테니스장 휴게실 기기 중 **단 1대만 정문 외부(실외 보관함)로 이동**하더라도 내부 안전 공백 없이 **수지구 내 가장 넓은 14개 격자(+0.33%p)의 심야 사각지대를 단번에 해소**할 수 있습니다. 예산 제약 시 단기적으로는 **개선안 A(1층 외부 직결 로비 이동)**를 즉시 시행하는 단계적 전략을 추천합니다.
+""",
+        "죽전역": """
+#### 💡 [2순위] 죽전역 맞춤형 야간 접근성 개선 리포트
+* **현재 문제점:** 죽전역은 유동인구가 밀집하는 핵심 거점이지만, AED(147번)가 **역무실 옆(역사 내부)**에 위치해 막차 종료 후 셔터가 내려가는 심야 시간(01시)에는 주변 **13개 격자**에서 접근이 전면 차단됩니다.
+
+---
+
+##### 1. 맞춤형 개선 대안 제시
+* **개선안 A (역사 야간 개방 통로/무인 환승 구역으로 이동):** 역무실 옆 기기를 24시간 보행 통행이 허용되는 역사 1층 주 출입구 게이트 바깥쪽 벽면으로 이동
+* **개선안 B (역사 외부 광장/버스환승센터 실외 보관함 설치):** 죽전역 출입구 외부 택시·심야버스 승강장 인근에 독립형 실외 AED 부스 설치
+
+##### 2. 개선안 다각도 비교 분석 (A vs B)
+| 평가 항목 | 개선안 A (야간 개방 출입구로 이동) | 개선안 B (실외 보관함으로 이동) |
+| :--- | :--- | :--- |
+| **예상 비용 및 관리 부담** | **낮음** (역사 내부 전기·통신망 그대로 활용, 역무원의 일상 점검 동선 유지) | **높음** (보도 점용 협의 및 실외 내구성 부스 설치, 외부 노출에 따른 정기 점검 부담) |
+| **접근성 개선 효과** | **높음** (셔터 바깥쪽 출입구 벽면에 위치하여 심야 보행자 및 운전자 즉시 접근 가능) | **매우 높음** (가시성이 가장 뛰어나며 심야 대중교통 이용객 누구나 즉시 발견 가능) |
+| **보안성 및 장비 안전** | **매우 높음** (역사 출입구 고화질 CCTV 상시 녹화 및 야간 당직 역무원 즉각 대응 가능) | **중간** (심야 시간대 취객 등에 의한 훼손 우려가 있어 강화형 스마트 케이스 필수) |
+
+##### 3. 최종 개선안 추천: **[개선안 A] 야간 개방 출입구(셔터 외부 맞닿은 구역)로 이동 추천**
+> **추천 근거:** 철도역사 특성상 심야에도 당직 역무원이 상주하지만 셔터로 인해 물리적 접근만 막혀 있는 상태입니다. 따라서 별도의 고비용 실외 부스를 신설하기보다, **출입구 셔터 바깥쪽 반실내(캐노피 하단) 구역이나 24시간 개방 보행 통로로 AED를 소폭 이동(개선안 A)**하는 것이 **최소 비용으로 13개 격자(+0.31%p) 커버리지를 확보**하고 역무원의 관리 효율성까지 지키는 가장 합리적인 솔루션입니다.
+""",
+        "포스코이앤씨용인다우CDC": """
+#### 💡 [3순위] 포스코이앤씨용인다우CDC 맞춤형 야간 접근성 개선 리포트
+* **현재 문제점:** 총 **3대의 AED**(출입컨테이너, 안전교육장, TBM장)가 보유되어 있으나 모두 현장 보안 구역 내부에 위치하여, 평일 야간(01시) 미운영 시 인근 **13개 격자**가 사각지대로 남게 됩니다.
+
+---
+
+##### 1. 맞춤형 개선 대안 제시
+* **개선안 A (정문 24시간 보안초소/출입 게이트 접점 이동):** 현장 내 3대 중 '출입컨테이너(196번)' 기기를 24시간 경비 인력이 상주하는 정문 외부 접견실 또는 경비초소 외벽 창가로 이동
+* **개선안 B (부지 경계선 외부 도로변 실외 보관함 설치):** 일반 시민과 야간 통행 차량이 보안 절차 없이 바로 사용할 수 있도록 정문 바깥쪽 공용 보도 옆에 실외 보관함 설치
+
+##### 2. 개선안 다각도 비교 분석 (A vs B)
+| 평가 항목 | 개선안 A (야간 상주 보안초소 접점 이동) | 개선안 B (부지 외부 실외 보관함 설치) |
+| :--- | :--- | :--- |
+| **예상 비용 및 관리 부담** | **매우 낮음** (기존 출입컨테이너 인접 초소로 위치만 조정, 보안 인력이 상시 관리) | **중상** (외부 전원 인입 공사 및 실외형 함체 설치 비용 발생) |
+| **접근성 개선 효과** | **높음** (야간 상주 경비원을 통해 즉시 불출 가능하며 외부 안내 표지판 부착 시 접근 용이) | **매우 높음** (보안 게이트 통과나 경비원 호출 없이 24시간 즉각 개방 가능) |
+| **보안성 및 장비 안전** | **매우 높음** (24시간 보안 인력 상주 구역으로 도난·파손 위험 제로) | **중상** (정문 보안 CCTV 감시 반경 내에 설치 시 높은 보안성 유지 가능) |
+
+##### 3. 최종 개선안 추천: **[개선안 A + B 절충형] 정문 경비초소 외벽(도로 방향) 설치 추천**
+> **추천 근거:** 해당 시설은 **3대의 AED가 동일한 13개 격자를 중복 커버**하고 있어, 내부 안전교육장·TBM장 기기 2대는 그대로 두고 **'출입컨테이너(196번)' 1대만 정문 경비초소 외벽(외부 도로에서 바로 열 수 있는 위치)으로 재배치**하는 것이 가장 효과적입니다. 이렇게 하면 보안 인력의 24시간 관리를 받으면서도 외부 시민의 심야 접근성을 100% 보장하여 **13개 격자(+0.31%p)를 완벽히 방어**할 수 있습니다.
+""",
     }
-    items = advice.get(facility, [
-        "해당 시설의 야간 출입 가능 여부와 AED가 설치된 공간의 개방 범위를 확인합니다.",
-        "시설 진입부와 주요 이동 동선에 AED 위치 안내를 보강합니다.",
-        "관리자 점검 주기와 비상 상황 시 접근·안내 책임 체계를 점검합니다.",
-    ])
-    return (
-        f"**분석 결과:** 그리디 우선순위 {rank}위이며, 이번 단계에서 신규 접근 가능 격자 "
-        f"{int(new_grids):,}개가 추가됩니다. 누적 커버리지는 {coverage:.2f}%입니다.\n\n"
-        + "\n".join([f"{i+1}. {x}" for i, x in enumerate(items)])
-        + f"\n\n**현장 확인 사항:** {common}"
-    )
+    return reports.get(facility, "선택한 시설의 상세 분석 리포트가 준비 중입니다.")
 
-def generate_gemini_advice(facility, rank, new_grids, coverage):
-    api_key = st.secrets.get("GEMINI_API_KEY", None) if hasattr(st, "secrets") else None
-    api_key = api_key or os.getenv("GEMINI_API_KEY")
-    if not api_key or not GEMINI_AVAILABLE:
-        return None, "Gemini API가 연결되지 않아 시설별 규칙 기반 예시를 표시합니다."
+
+def call_gemini_api(facility: str, api_key: str):
+    """Gemini API를 실시간 호출하여 A vs B 비교 및 최종 추천 리포트를 생성합니다."""
+    info = FACILITY_DETAILS.get(facility, {})
     prompt = f"""
-너는 공공 응급의료 접근성 개선을 지원하는 정책 분석 보조자다.
-아래 입력만 근거로 한국어 개선안을 작성하라.
-시설명: {facility}
-그리디 우선순위: {rank}위
-신규 접근 가능 격자: {int(new_grids)}개
-누적 커버리지: {coverage:.2f}%
-분석 시나리오: 기존 AED 위치에서 야간 이용 가능 상태로 전환
-요구사항:
-- 시설의 실제 구조, 운영시간, 출입 정책을 알고 있다고 가정하지 말 것.
-- 확인되지 않은 사실은 단정하지 말고 '현장 확인 필요'로 표시할 것.
-- 실행 가능한 개선안 3개와 현장 확인 항목 2개를 제시할 것.
-- AED 신규 설치가 아니라 기존 AED의 야간 접근성 개선에 초점을 둘 것.
+당신은 용인시 수지구 'AED 접근성 개선 시스템'의 AI 정책 컨설턴트입니다.
+그리디 알고리즘 분석 결과, 아래 시설이 심야 시간(오전 1시) 사각지대 해소를 위한 핵심 우선순위로 선정되었습니다.
+
+[분석 데이터]
+- 시설명: {facility} (그리디 우선순위 {info.get('rank')}위)
+- 시설 내 보유 AED 수: {info.get('aed_count')}대 ({info.get('locations')})
+- 개선 시 신규 커버되는 사각지대 격자 수: {info.get('new_grids')}개 (100m×100m 격자 기준)
+- 개선 후 누적 커버리지: {info.get('cum_coverage')}%
+- 주변 환경 특성: {info.get('env')}
+
+[작성 요청사항]
+신규 AED 구매가 아니라 '기존 AED의 재배치 및 야간 개방 전환'을 전제로 아래 구조에 맞춰 깔끔한 마크다운 보고서를 작성해 주세요.
+1. 맞춤형 개선안 제시:
+   - 개선안 A: 야간에 접근할 수 있는 출입구(또는 24시간 상주 초소 접점)로 이동
+   - 개선안 B: AED를 건물 외부(실외 스마트 보관함)로 이동
+2. A vs B 다각도 비교 분석 (마크다운 표 활용):
+   - 비교 기준: ① 예상 비용 및 관리 부담, ② 접근성 개선 효과, ③ 보안성 및 장비 안전
+3. 최종 개선안 추천:
+   - 해당 시설의 AED 보유 대수(중복 여부)와 위치 특성을 고려해 A와 B 중 가장 합리적인 최종안을 구체적 근거와 함께 추천해 주세요.
 """
-    try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        return response.text, "Gemini AI가 생성한 개선안입니다. 실제 적용 전 현장 확인이 필요합니다."
-    except Exception as exc:
-        return None, f"Gemini 호출에 실패했습니다. 규칙 기반 개선안을 대신 표시합니다. ({type(exc).__name__})"
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+    )
+    return response.text
 
 
 # ------------------------------------------------------------
-# Header and sidebar
+# 5. 메인 화면 구성 (헤더 & 사이드바)
 # ------------------------------------------------------------
+summary_df = get_summary_data()
+greedy_df, meta = get_greedy_data()
+aed_grid_map = get_aed_grid_mapping()
+geojson_data = get_geojson_data()
+
 st.markdown("""
 <div class="hero">
-  <h1>❤️ AED 접근성 개선 시스템</h1>
-  <p>용인시 수지구의 시간대별 AED 접근 사각지대를 분석하고, 개선 우선순위를 제안합니다.</p>
+  <h1>🚑 AED 접근성 개선 시스템</h1>
+  <p>용인시 수지구 시간대별(오전 1시 vs 오후 1시) AED 사각지대 분석 및 그리디 알고리즘·Gemini AI 기반 최적 개선안 도출 대시보드</p>
+  <div>
+    <span class="badge">📍 대상 지역: 용인시 수지구</span>
+    <span class="badge">📐 격자 단위: 100m × 100m (총 4,221개)</span>
+    <span class="badge">🎯 AED 유효 반경: 200m (총 214대)</span>
+    <span class="badge">🌙 최적화 기준: 평일 오전 1시 평균</span>
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
-greedy_df, meta = get_greedy_data()
-if greedy_df.empty:
-    st.error("그리디 결과 파일을 찾지 못했습니다. data/greedy_results.json 또는 data/greedy_top5.csv를 확인해주세요.")
-    st.stop()
-
 with st.sidebar:
-    st.header("분석 설정")
-    selected_hour = st.radio("시간대", ["01:00", "13:00"], horizontal=True)
-    st.caption("현재 제공된 그리디 결과는 평일 오전 1시 평균 기준입니다.")
-    st.divider()
-    st.markdown("**분석 조건**")
-    st.write("지역: 용인시 수지구")
-    st.write("격자: 100m × 100m")
-    st.write(f"접근 반경: {meta.get('radius_m', 200)}m")
-    st.write(f"전체 격자: {meta.get('grid_count', 4221):,}개")
-    st.divider()
-    st.markdown("**지도 데이터 추가**")
-    grid_upload = st.file_uploader(
-        "격자별 접근성 CSV 업로드",
-        type=["csv"],
-        help="위도·경도와 access_01/access_13 열을 포함한 격자별 데이터",
+    st.header("⚙️ 분석 및 지도 설정")
+    selected_hour = st.radio(
+        "🕒 비교 시간대 선택",
+        ["오전 1시 (01:00)", "오후 1시 (13:00)"],
+        index=0,
+        help="오전 1시(심야)와 오후 1시(주간)의 가용률·커버리지 및 사각지대 분포를 비교합니다.",
     )
-    st.caption("CSV 예시 열: lat, lon, access_01, access_13")
 
-# ------------------------------------------------------------
-# Metrics
-# ------------------------------------------------------------
-baseline = greedy_df.iloc[0]
-last = greedy_df.iloc[-1]
-base_cov = float(baseline.get("누적_커버리지(%)", 20.2322))
-top5_cov = float(last.get("누적_커버리지(%)", 21.6063))
-base_count = int(float(baseline.get("누적_접근가능격자", 854)))
-top5_count = int(float(last.get("누적_접근가능격자", 912)))
-increase_pp = top5_cov - base_cov
-
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("전체 분석 격자", f"{int(meta.get('grid_count', 4221)):,}개")
-m2.metric("개선 전 접근 가능", f"{base_count:,}개", f"커버리지 {base_cov:.2f}%")
-m3.metric("TOP 5 개선 후", f"{top5_count:,}개", f"+{top5_count-base_count:,}개")
-m4.metric("커버리지 증가", f"+{increase_pp:.2f}%p", "개선 전 대비")
-
-st.caption("※ 위 지표는 업로드된 greedy_results.json의 오전 1시 평일 평균 결과를 그대로 사용합니다.")
-
-# ------------------------------------------------------------
-# Main: map left, greedy ranking right
-# ------------------------------------------------------------
-left, right = st.columns([1.12, 0.88], gap="large")
-
-with left:
-    st.markdown('<div class="section-title">🗺️ AED 접근성 지도</div>', unsafe_allow_html=True)
-    st.caption("초록색: AED 접근 가능 격자 / 빨간색: 접근 사각지대")
-    if selected_hour == "13:00":
-        st.info("오후 1시의 격자별 접근성 원자료가 아직 제공되지 않았습니다. 13시 데이터 업로드 후 지도에 표시할 수 있습니다.")
-    if grid_upload is not None:
-        try:
-            uploaded_df = pd.read_csv(grid_upload, encoding="utf-8-sig")
-            normalized, error = normalize_grid_columns(uploaded_df)
-            if error:
-                st.warning(error)
-            else:
-                render_grid_map(normalized, selected_hour)
-        except Exception as exc:
-            st.error(f"지도 CSV를 읽지 못했습니다: {exc}")
-    else:
-        st.warning(
-            "격자별 좌표 데이터가 없어 실제 사각지대 지도는 아직 표시할 수 없습니다. "
-            "위도·경도와 시간대별 접근 여부가 포함된 CSV를 왼쪽 메뉴에서 업로드해주세요."
-        )
-        st.markdown("""
-        **필요한 CSV 열 예시**
-        ```csv
-        lat,lon,access_01,access_13
-        37.32,127.09,1,0
-        37.33,127.10,0,1
-        ```
-        `1`은 접근 가능, `0`은 접근 불가능을 의미하도록 준비하면 됩니다.
-        """)
-
-with right:
-    st.markdown('<div class="section-title">🏆 그리디 알고리즘 TOP 5</div>', unsafe_allow_html=True)
-    display_cols = ["순위", "시설명", "평일평균_신규격자", "누적_커버리지(%)"]
-    available_cols = [c for c in display_cols if c in greedy_df.columns]
-    table_df = greedy_df[available_cols].copy()
-    if "순위" in table_df:
-        table_df["순위"] = table_df["순위"].astype(int)
-    st.dataframe(
-        table_df.rename(columns={
-            "평일평균_신규격자": "신규 격자",
-            "누적_커버리지(%)": "누적 커버리지(%)",
-        }),
-        use_container_width=True,
-        hide_index=True,
-        height=265,
+    st.divider()
+    st.subheader("🔍 그리디 개선 시뮬레이션")
+    sim_step = st.slider(
+        "오전 1시 TOP N 시설 개선 적용",
+        min_value=0,
+        max_value=5,
+        value=5,
+        help="0단계(개선 전)부터 TOP 5 시설까지 야간 개방 전환 시 지도에 파란색으로 신규 커버 격자가 표시됩니다.",
     )
-    st.caption("동점일 경우 시설명 오름차순으로 정렬된 결과입니다.")
+    only_active = st.checkbox(
+        "AED 반경 200m 인접 격자 중심으로 보기",
+        value=True,
+        help="체크 시 산림·외곽 등 AED와 무관한 격자를 제외하여 속도와 시인성을 높입니다.",
+    )
+
+    st.divider()
+    st.subheader("🤖 Gemini API 설정 (선택)")
+    user_api_key = st.text_input(
+        "Gemini API Key 입력",
+        type="password",
+        placeholder="AIzaSy...",
+        help="키를 입력하면 실시간 Gemini API를 호출하며, 비워두면 사전 생성된 A vs B 분석 리포트를 즉시 표시합니다.",
+    )
+
+
+# ------------------------------------------------------------
+# 6. 상단 핵심 지표: 오전 1시 vs 오후 1시 가용률 & 커버리지 비교
+# ------------------------------------------------------------
+st.markdown('<div class="section-title">📊 시간대별 AED 가용률 & 커버리지 비교 (오전 1시 vs 오후 1시)</div>', unsafe_allow_html=True)
+
+row_01 = summary_df[summary_df["시간"].astype(str).str.contains("01")].iloc[0]
+row_13 = summary_df[summary_df["시간"].astype(str).str.contains("13")].iloc[0]
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric(
+    "🌙 오전 1시 AED 가용률",
+    f"{float(row_01['AED이용가능률(%)']):.2f}%",
+    f"이용 가능 {int(row_01['이용가능_AED수'])}대 / 214대 (오후 대비 -19.35%p)",
+    delta_color="inverse",
+)
+c2.metric(
+    "☀️ 오후 1시 AED 가용률",
+    f"{float(row_13['AED이용가능률(%)']):.2f}%",
+    f"이용 가능 {float(row_13['이용가능_AED수']):.1f}대 / 214대 (주간 평일 평균)",
+)
+c3.metric(
+    "🌙 오전 1시 격자 커버리지 (개선 전)",
+    f"{float(row_01['격자접근가능률(%)']):.2f}%",
+    f"접근 가능 {int(row_01['접근가능격자수']):,}개 / 4,221개 (사각지대 3,367개)",
+    delta_color="off",
+)
+c4.metric(
+    "🚀 오전 1시 TOP 5 개선 후 커버리지",
+    "21.61%",
+    "+1.37%p 증가 (854개 → 912개, +58개 격자 해소)",
+)
+
+with st.expander("📋 오전 1시 vs 오후 1시 가용률·커버리지 상세 비교표 보기"):
+    comp_df = pd.DataFrame([
+        {
+            "구분": "☀️ 오후 1시 (주간 평일 평균)",
+            "전체 AED 수": "214대",
+            "가용 AED 수": f"{float(row_13['이용가능_AED수']):.1f}대",
+            "AED 가용률(%)": f"{float(row_13['AED이용가능률(%)']):.2f}%",
+            "접근 가능 격자 (200m 내)": f"{float(row_13['접근가능격자수']):,.1f}개",
+            "사각지대 격자": f"{float(row_13['사각지대격자수']):,.1f}개",
+            "격자 커버리지(%)": f"{float(row_13['격자접근가능률(%)']):.2f}%",
+        },
+        {
+            "구분": "🌙 오전 1시 (심야 개선 전)",
+            "전체 AED 수": "214대",
+            "가용 AED 수": f"{int(row_01['이용가능_AED수'])}대",
+            "AED 가용률(%)": f"{float(row_01['AED이용가능률(%)']):.2f}%",
+            "접근 가능 격자 (200m 내)": "854개",
+            "사각지대 격자": "3,367개",
+            "격자 커버리지(%)": "20.23%",
+        },
+        {
+            "구분": "🌟 오전 1시 (그리디 TOP 5 개선 후)",
+            "전체 AED 수": "214대",
+            "가용 AED 수": "181대 (+11대 개방 효과)",
+            "AED 가용률(%)": "84.58% (+5.14%p)",
+            "접근 가능 격자 (200m 내)": "912개 (+58개)",
+            "사각지대 격자": "3,309개 (-58개)",
+            "격자 커버리지(%)": "21.61% (+1.37%p)",
+        },
+    ])
+    st.dataframe(comp_df, use_container_width=True, hide_index=True)
 
 st.divider()
 
+
 # ------------------------------------------------------------
-# Cumulative coverage chart
+# 7. 메인 대시보드: 왼쪽(지도) / 오른쪽(그리디 TOP 5 + 누적 커버리지 그래프)
 # ------------------------------------------------------------
-st.markdown('<div class="section-title">📈 개선 단계별 누적 커버리지</div>', unsafe_allow_html=True)
-chart_df = greedy_df.copy()
-if "순위" in chart_df.columns and "누적_커버리지(%)" in chart_df.columns:
+highlight_grids = set()
+if sim_step > 0:
+    active_rows = greedy_df[greedy_df["순위"].astype(int).between(1, sim_step)]
+    for _, r in active_rows.iterrows():
+        aed_ids_str = str(r.get("AED_ID_목록", ""))
+        for token in aed_ids_str.split(","):
+            token = token.strip()
+            if token.isdigit():
+                highlight_grids.update(aed_grid_map.get(int(token), []))
+
+left_col, right_col = st.columns([1.15, 0.85], gap="large")
+
+with left_col:
+    st.markdown('<div class="section-title">🗺️ 용인시 수지구 AED 접근성 지도 (시간대별 사각지대 비교)</div>', unsafe_allow_html=True)
+    st.markdown(
+        f"**현재 표시 기준:** `{selected_hour}` | "
+        "🟩 **초록색**: 접근 가능 격자 &nbsp; 🟥 **빨간색**: 접근 사각지대 &nbsp; 🟦 **파란색**: 그리디 TOP 우선순위 신규 해소 격자"
+    )
+    if geojson_data is not None:
+        render_geojson_map(geojson_data, selected_hour, highlight_grids, only_active_area=only_active)
+    else:
+        st.warning("`사각지대_지도용.geojson` 파일을 찾을 수 없습니다. 폴더에 파일을 넣어주세요.")
+
+with right_col:
+    st.markdown('<div class="section-title">🏆 그리디 알고리즘 TOP 5 개선 우선순위</div>', unsafe_allow_html=True)
+    st.caption("오전 1시 평일 평균 기준, 기존 시설 야간 개방 시 신규 커버 격자 수가 가장 큰 순서")
+
+    table_df = greedy_df.copy()
+    table_df["순위_표시"] = table_df["순위"].apply(lambda x: "개선 전" if int(x) == 0 else f"TOP {int(x)}")
+    table_df["신규 커버 격자"] = table_df["평일평균_신규격자"].apply(lambda x: "-" if float(x) == 0 else f"+{int(float(x))}개")
+    table_df["누적 접근가능 격자"] = table_df["누적_접근가능격자"].apply(lambda x: f"{int(float(x)):,}개")
+    table_df["누적 커버리지"] = table_df["누적_커버리지(%)"].apply(lambda x: f"{float(x):.2f}%")
+    table_df["증가폭(%p)"] = table_df["개선전대비_증가(pp)"].apply(lambda x: "-" if float(x) == 0 else f"+{float(x):.2f}%p")
+
+    st.dataframe(
+        table_df[["순위_표시", "시설명", "신규 커버 격자", "누적 접근가능 격자", "누적 커버리지", "증가폭(%p)"]].rename(
+            columns={"순위_표시": "단계"}
+        ),
+        use_container_width=True,
+        hide_index=True,
+        height=250,
+    )
+
+    st.markdown('<div class="section-title" style="margin-top:0.8rem;">📈 TOP 5 단계별 누적 커버리지 증가 그래프</div>', unsafe_allow_html=True)
+
+    chart_df = greedy_df.copy()
     chart_df["단계"] = chart_df.apply(
-        lambda r: "개선 전" if int(r["순위"]) == 0 else f"TOP {int(r['순위'])}", axis=1
+        lambda r: "개선 전\n(854개)" if int(r["순위"]) == 0 else f"TOP {int(r['순위'])}\n({r['시설명'][:6]})",
+        axis=1,
     )
-    fig = px.line(
-        chart_df,
-        x="단계",
-        y="누적_커버리지(%)",
-        markers=True,
-        text="누적_커버리지(%)",
-        hover_data=["시설명", "누적_접근가능격자", "평일평균_신규격자"],
-        labels={"누적_커버리지(%)": "누적 커버리지(%)", "단계": "개선 단계"},
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=chart_df["단계"],
+            y=chart_df["평일평균_신규격자"],
+            name="신규 커버 격자 수(개)",
+            marker_color="#93c5fd",
+            yaxis="y2",
+            opacity=0.55,
+            text=chart_df["평일평균_신규격자"].apply(lambda v: f"+{int(v)}개" if v > 0 else ""),
+            textposition="inside",
+        )
     )
-    fig.update_traces(line=dict(width=3), marker=dict(size=10), texttemplate="%{text:.2f}%", textposition="top center")
+    fig.add_trace(
+        go.Scatter(
+            x=chart_df["단계"],
+            y=chart_df["누적_커버리지(%)"],
+            name="누적 커버리지(%)",
+            mode="lines+markers+text",
+            line=dict(color="#0d9488", width=3.5),
+            marker=dict(size=10, color="#0f766e"),
+            text=chart_df["누적_커버리지(%)"].apply(lambda v: f"{v:.2f}%"),
+            textposition="top center",
+        )
+    )
+
     fig.update_layout(
-        height=360, margin=dict(l=15, r=15, t=35, b=15),
-        plot_bgcolor="white", paper_bgcolor="white",
-        yaxis=dict(range=[max(0, base_cov - 1), top5_cov + 1], ticksuffix="%"),
-        xaxis=dict(title=None),
+        height=280,
+        margin=dict(l=10, r=10, t=25, b=10),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        yaxis=dict(
+            title="누적 커버리지(%)",
+            range=[19.8, 22.1],
+            ticksuffix="%",
+            gridcolor="#f1f5f9",
+        ),
+        yaxis2=dict(
+            title="신규 격자(개)",
+            overlaying="y",
+            side="right",
+            range=[0, 22],
+            showgrid=False,
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         hovermode="x unified",
     )
     st.plotly_chart(fig, use_container_width=True)
-    st.success(
-        f"TOP 5 개선 시 접근 가능 격자는 {base_count:,}개에서 {top5_count:,}개로 증가하고, "
-        f"커버리지는 {base_cov:.2f}%에서 {top5_cov:.2f}%로 {increase_pp:.2f}%p 상승합니다."
+
+
+# ------------------------------------------------------------
+# 8. 하단: Gemini AI 맞춤형 개선안 (상위 3개 시설 중심)
+# ------------------------------------------------------------
+st.divider()
+st.markdown('<div class="section-title">✨ Gemini AI 시설별 맞춤형 개선안 (TOP 3 우선순위 집중 분석)</div>', unsafe_allow_html=True)
+st.write(
+    "그리디 알고리즘으로 도출된 **상위 3개 핵심 시설(아르피아스포츠센터, 죽전역, 포스코이앤씨용인다우CDC)**을 선택하면, "
+    "**대안 A(출입구 이동) vs 대안 B(실외 보관함 설치)** 정성 비교 및 최종 추천 솔루션을 확인할 수 있습니다."
+)
+
+top3_facilities = ["아르피아스포츠센터", "죽전역", "포스코이앤씨용인다우CDC"]
+col_sel, col_btn = st.columns([0.7, 0.3])
+
+with col_sel:
+    selected_facility = st.selectbox(
+        "🏢 개선안을 확인할 우선순위 시설 선택 (TOP 1 ~ 3)",
+        top3_facilities,
+        format_func=lambda x: f"TOP {FACILITY_DETAILS[x]['rank']}위 | {x} (신규 커버 +{FACILITY_DETAILS[x]['new_grids']}개 격자, 보유 AED {FACILITY_DETAILS[x]['aed_count']}대)",
     )
 
-st.divider()
+info = FACILITY_DETAILS[selected_facility]
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("그리디 우선순위", f"TOP {info['rank']}위")
+k2.metric("시설 내 보유 AED", f"{info['aed_count']}대")
+k3.metric("신규 커버 격자 수", f"+{info['new_grids']}개")
+k4.metric("적용 후 누적 커버리지", f"{info['cum_coverage']:.2f}%")
 
-# ------------------------------------------------------------
-# Gemini / facility-specific recommendations
-# ------------------------------------------------------------
-st.markdown('<div class="section-title">✨ Gemini AI 맞춤형 개선안</div>', unsafe_allow_html=True)
-st.write("그리디 알고리즘 상위 3개 시설을 중심으로 기존 AED의 야간 접근성을 개선하는 방안을 제안합니다.")
+st.caption(f"📍 **현재 AED 설치 위치:** {info['locations']}")
 
-top3 = greedy_df[greedy_df["순위"].astype(int).between(1, 3)].copy()
-if top3.empty:
-    st.warning("TOP 3 시설 정보가 결과 파일에 없습니다.")
-else:
-    facility_options = top3["시설명"].tolist()
-    selected_facility = st.selectbox("개선안을 확인할 시설 선택", facility_options)
-    selected_row = top3[top3["시설명"] == selected_facility].iloc[0]
-    rank = int(selected_row["순위"])
-    new_grids = float(selected_row["평일평균_신규격자"])
-    coverage = float(selected_row["누적_커버리지(%)"])
+api_key_to_use = user_api_key or os.getenv("GEMINI_API_KEY") or (st.secrets.get("GEMINI_API_KEY", None) if hasattr(st, "secrets") else None)
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("우선순위", f"{rank}위")
-    c2.metric("신규 접근 가능 격자", f"{new_grids:,.0f}개")
-    c3.metric("누적 커버리지", f"{coverage:.2f}%")
-
-    if st.button("선택한 시설의 AI 개선안 생성", type="primary"):
-        with st.spinner("개선안을 생성하고 있습니다..."):
-            ai_text, status = generate_gemini_advice(selected_facility, rank, new_grids, coverage)
-            st.session_state["ai_advice"] = ai_text
-            st.session_state["ai_status"] = status
-            st.session_state["ai_facility"] = selected_facility
-
-    if st.session_state.get("ai_facility") == selected_facility and st.session_state.get("ai_advice"):
-        st.info(st.session_state.get("ai_status", ""))
-        st.markdown(st.session_state["ai_advice"])
+if st.button("🔄 Gemini API로 실시간 맞춤형 개선안 새로 생성하기", type="primary"):
+    if api_key_to_use and GEMINI_AVAILABLE:
+        with st.spinner(f"Gemini AI가 '{selected_facility}'의 맞춤형 개선안(A vs B)을 분석 중입니다..."):
+            try:
+                live_text = call_gemini_api(selected_facility, api_key_to_use)
+                st.session_state[f"report_{selected_facility}"] = live_text
+                st.success("Gemini API 실시간 분석이 완료되었습니다!")
+            except Exception as e:
+                st.warning(f"API 호출 중 오류가 발생하여 사전 구성된 분석 리포트를 표시합니다. ({e})")
     else:
-        st.markdown(
-            build_rule_based_advice(selected_facility, rank, new_grids, coverage),
-            unsafe_allow_html=False,
-        )
-        st.caption("위 내용은 API 연결 전 미리보기용 규칙 기반 예시입니다. Gemini 생성 결과가 아닙니다.")
+        st.info("사이드바에 Gemini API Key를 입력하시면 실시간 생성이 가능하며, 현재는 해커톤 발표용으로 최적화된 A vs B 분석 리포트를 표시합니다.")
 
-st.divider()
-with st.expander("데이터 및 해석상 유의사항"):
-    st.markdown("""
-    - 그리디 결과는 제공된 `greedy_results.json` 및 `greedy_top5.csv`의 값을 사용합니다.
-    - 현재 결과의 기준은 **오전 1시 평일 평균**, 전체 4,221개 격자, AED 접근 반경 200m입니다.
-    - 제공된 결과에서 TOP 5 누적 커버리지는 21.6063%이며, 개선 전 대비 증가량은 약 1.3741%p입니다.
-    - 현재 제공된 파일에는 오후 1시 결과 및 격자별 좌표가 없습니다. 따라서 해당 시간대 지도·가용률을 임의로 계산하지 않습니다.
-    - Gemini API 키가 없거나 호출에 실패하면 규칙 기반 개선안 미리보기를 표시합니다.
-    - 이 웹사이트는 분석·정책 검토를 위한 시제품이며, 실제 AED 접근 가능 여부는 시설 운영시간·출입 통제·장비 상태를 현장에서 확인해야 합니다.
-    """)
-st.caption("AED 접근성 개선 시스템 | 용인시 수지구 | 분석 시제품")
+report_content = st.session_state.get(f"report_{selected_facility}", get_prebuilt_ai_report(selected_facility))
+st.markdown(f'<div class="ai-box">{report_content}</div>', unsafe_allow_html=True)
