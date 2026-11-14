@@ -121,6 +121,54 @@ def get_aed_grid_mapping():
 
 
 @st.cache_data
+def get_nearby_aed_text():
+    """격자_ID -> '근처 AED' 안내 문구. (설치기관명·위치, 오전 1시 운영 여부)"""
+    p = find_file("AED별_커버_격자목록.json")
+    if not p:
+        return {}
+    aeds = load_json_safe(str(p))
+
+    # 오전 1시 운영 여부 (선택 파일): AED_ID -> 01시 미운영 일수(0이면 평일 모두 운영)
+    closed_days = {}
+    pf = find_file("시설별_야간개선_분석.csv")
+    if pf:
+        fdf = load_csv_safe(str(pf))
+        for _, r in fdf.iterrows():
+            closed_days[int(r["AED_ID_목록"])] = int(r["01시_미운영일수"])
+
+    grid_to_aed = {}
+    for a in aeds:
+        org, loc = str(a["설치기관명"]).strip(), str(a["설치위치"]).strip()
+        label = loc if loc.startswith(org) else f"{org} {loc}".strip()   # 기관명 중복 방지
+        for gid in a.get("커버_격자_ID_목록", []):
+            grid_to_aed.setdefault(int(gid), []).append((int(a["AED_ID"]), label))
+
+    texts = {}
+    for gid, lst in grid_to_aed.items():
+        texts[gid] = lst            # 문구는 시간대에 따라 달라지므로 목록만 저장
+    return {"grid_to_aed": texts, "closed_days": closed_days}
+
+
+def make_aed_text(gid, nearby, is_night, max_show=3):
+    """툴팁에 보여줄 근처 AED 문구"""
+    lst = nearby.get("grid_to_aed", {}).get(gid, [])
+    if not lst:
+        return "200m 안에 AED 없음"
+    closed = nearby.get("closed_days", {})
+    parts = []
+    for aed_id, label in lst[:max_show]:
+        if is_night and closed:
+            tag = "🌙미운영" if closed.get(aed_id, 5) > 0 else "🌙운영"
+            parts.append(f"{label} ({tag})")
+        else:
+            parts.append(label)
+    text = " / ".join(parts)
+    if len(lst) > max_show:
+        text += f" 외 {len(lst) - max_show}대"
+    return text
+
+
+@st.cache_data
 def get_geojson_data():
     """전체 4,221개 격자 파일을 우선 사용합니다. (없으면 기존 사각지대 파일 사용)"""
     p = find_file("격자_전체_지도용.geojson")
@@ -135,14 +183,12 @@ def get_geojson_data():
 # ============================================================
 # 3. 지도 그리기 (GeoJSON 폴리곤)
 # ============================================================
-def render_geojson_map(geojson_data, is_night, highlight_grids, only_active_area=True):
+def render_geojson_map(geojson_data, is_night, highlight_grids, only_active_area=True, nearby=None):
     if not FOLIUM_AVAILABLE:
         st.error("folium / streamlit-folium 이 설치되지 않았습니다. (pip install folium streamlit-folium)")
         return
 
     blind_col = "01시_평일_사각지대" if is_night else "13시_평일_사각지대"
-    rate_col = "01시_평일평균_접근가능률(%)" if is_night else "13시_평일평균_접근가능률(%)"
-
     features = []
     for feat in geojson_data.get("features", []):
         props = dict(feat.get("properties", {}))      # 원본이 바뀌지 않도록 복사
@@ -165,8 +211,7 @@ def render_geojson_map(geojson_data, is_night, highlight_grids, only_active_area
 
         props["상태_설명"] = status
         props["_color"] = color
-        props.setdefault(rate_col, 0)
-        props.setdefault("가장가까운_AED_거리_m", 0)
+        props["근처_AED"] = make_aed_text(gid, nearby or {}, is_night)
         features.append({"type": "Feature", "geometry": feat["geometry"], "properties": props})
 
     styles = {
@@ -176,14 +221,14 @@ def render_geojson_map(geojson_data, is_night, highlight_grids, only_active_area
         "blind_far":  {"fillColor": "#fca5a5", "color": "#f87171", "weight": 0.2, "fillOpacity": 0.25},
     }
 
-    m = folium.Map(location=[37.325, 127.085], zoom_start=12, tiles="CartoDB positron")
+    m = folium.Map(location=[37.325, 127.085], zoom_start=12, tiles="OpenStreetMap")
     folium.GeoJson(
         {"type": "FeatureCollection", "features": features},
         style_function=lambda f: styles[f["properties"]["_color"]],
         tooltip=folium.GeoJsonTooltip(
-            fields=["격자_ID", "상태_설명", rate_col, "가장가까운_AED_거리_m"],
-            aliases=["격자 ID:", "상태:", "평일 접근가능률(%):", "최근접 AED 거리(m):"],
-            localize=True,
+            fields=["상태_설명", "근처_AED"],
+            aliases=["상태:", "근처 AED:"],
+            style="white-space: normal; max-width: 320px;",
         ),
     ).add_to(m)
     st_folium(m, height=540, use_container_width=True, returned_objects=[])
@@ -448,7 +493,8 @@ with left_col:
         if not is_full_geojson:
             st.warning("기존 `사각지대_지도용.geojson`에는 오전 1시 접근 가능 격자(854개)가 없어 초록색이 일부만 표시됩니다. "
                        "`격자_전체_지도용.geojson`을 사용해 주세요.")
-        render_geojson_map(geojson_data, is_night, highlight_grids, only_active_area=only_active)
+        render_geojson_map(geojson_data, is_night, highlight_grids, only_active_area=only_active,
+                           nearby=get_nearby_aed_text())
 
 with right_col:
     st.markdown('<div class="section-title">🏆 그리디 알고리즘 TOP 5 개선 우선순위</div>', unsafe_allow_html=True)
@@ -472,7 +518,7 @@ with right_col:
         lambda r: f"개선 전<br>({int(float(r['누적_접근가능격자']))}개)" if r["순위"] == 0 else f"TOP {r['순위']}<br>({str(r['시설명'])[:6]})",
         axis=1,
     )
-    y_min = float(chart_df["누적_커버리지(%)"].min()) - 0.5
+    y_min = float(chart_df["누적_커버리지(%)"].min()) - 2.0
     y_max = float(chart_df["누적_커버리지(%)"].max()) + 0.6
 
     fig = go.Figure()
@@ -491,7 +537,7 @@ with right_col:
     fig.update_layout(
         height=300, margin=dict(l=10, r=10, t=25, b=10),
         yaxis=dict(title="누적 커버리지(%)", range=[y_min, y_max], ticksuffix="%", gridcolor="rgba(128,128,128,0.2)"),
-        yaxis2=dict(title="신규 격자(개)", overlaying="y", side="right", range=[0, 22], showgrid=False),
+        yaxis2=dict(title="신규 격자(개)", overlaying="y", side="right", range=[0, 40], dtick=10, showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         hovermode="x unified",
     )
